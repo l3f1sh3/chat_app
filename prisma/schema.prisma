@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                Int                       @id @default(autoincrement())
+  email             String                    @unique
+  password          String
+  name              String
+  refreshTokenHash  String?                   @unique
+  conversations     ConversationParticipant[]
+  messages          Message[]
+  reactions         Reaction[]
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+}
+
+model Conversation {
+  id           Int                       @id @default(autoincrement())
+  name         String?
+  participants ConversationParticipant[]
+  messages     Message[]
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+}
+
+model ConversationParticipant {
+  id             Int          @id @default(autoincrement())
+  conversationId Int
+  userId         Int
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt       DateTime     @default(now())
+
+  @@unique([conversationId, userId])
+}
+
+model Message {
+  id             Int          @id @default(autoincrement())
+  content        String
+  conversationId Int
+  authorId       Int
+  replyToId      Int?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author         User         @relation(fields: [authorId], references: [id])
+  replyTo        Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies        Message[]    @relation("MessageReplies")
+  reactions      Reaction[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Reaction {
+  id        Int      @id @default(autoincrement())
+  messageId Int
+  userId    Int
+  emojiId   Int
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+  emoji     Emoji    @relation(fields: [emojiId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+}
+
+model Emoji {
+  id        Int        @id @default(autoincrement())
+  symbol    String
+  name      String     @unique
+  reactions Reaction[]
+  createdAt DateTime   @default(now())
+}
+
