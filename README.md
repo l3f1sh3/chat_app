@@ -43,6 +43,13 @@ Kompletné Backend API pre chatting aplikáciu typu Slack. Postavené na **Elysi
 - Odstránenie reakcie
 - 77 dostupných emoji
 
+### Pagination
+- **Cursor-based pagination** pre správy v konverzáciách
+- Optimalizované pre real-time chat aplikácie
+- Konzistentné výsledky aj pri novo pridaných správach
+- Konfigurovateľný limit (1-100, default: 50)
+- Správy zoradené od najnovších po najstaršie
+
 ### Bezpečnosť
 - Všetky chat endpointy vyžadujú autentifikáciu
 - Kontrola prístupu ku konverzáciám (iba účastníci)
@@ -194,7 +201,7 @@ Server beží na: `http://localhost:3000` 🦊
 | Endpoint | Method | Auth | Popis |
 |----------|--------|------|-------|
 | `/chat/conversations/:id/messages` | POST | Yes | Poslanie správy |
-| `/chat/conversations/:id/messages` | GET | Yes | Zobrazenie všetkých správ |
+| `/chat/conversations/:id/messages` | GET | Yes | Zobrazenie správ s pagination |
 
 #### Send Message:
 ```json
@@ -211,19 +218,68 @@ Server beží na: `http://localhost:3000` 🦊
 }
 ```
 
-### Reactions (`/chat/messages/:id/reactions`)
+#### Get Messages (s pagination):
+```
+GET /chat/conversations/:id/messages?limit=20&cursor=123
+```
+
+**Query parametry:**
+- `limit` (optional): Počet správ na stránku (1-100, default: 50)
+- `cursor` (optional): ID správy pre ďalšiu stránku
+
+**Response:**
+```json
+{
+  "data": [
+    {
+      "id": 125,
+      "content": "Latest message",
+      "author": { "id": 1, "name": "Alice", "email": "alice@example.com" },
+      "replyTo": null,
+      "reactions": [],
+      "createdAt": "2024-01-15T10:30:00Z"
+    },
+    ...
+  ],
+  "pagination": {
+    "nextCursor": "105",
+    "hasMore": true,
+    "limit": 20
+  }
+}
+```
+
+**Poznámky:**
+- Správy sú zoradené od **najnovších po najstaršie** (DESC)
+- `nextCursor` je `null` ak neexistujú ďalšie správy
+- Pre načítanie starších správ použite `cursor` z predchádzajúcej odpovede
+- Cursor-based pagination zaručuje konzistentné výsledky aj pri real-time správach
+
+### Reactions
 
 | Endpoint | Method | Auth | Popis |
 |----------|--------|------|-------|
 | `/chat/messages/:id/reactions` | POST | Yes | Pridanie/zmena reakcie |
-| `/chat/messages/:id/reactions` | DELETE | Yes | Odstránenie reakcie |
+| `/chat/reactions/:id` | DELETE | Yes | Odstránenie konkrétnej reakcie (len vlastnej) |
 
-#### Add Reaction:
+#### Add/Update Reaction:
 ```json
 {
   "emojiId": 1
 }
 ```
+
+**Poznámka:** Každý používateľ môže mať max 1 reakciu na správu. Ak už reakciu má, automaticky sa zmení (upsert).
+
+#### Delete Reaction:
+```
+DELETE /chat/reactions/:reactionId
+```
+
+**Bezpečnosť:**
+- Používateľ môže vymazať **len svoju vlastnú reakciu**
+- Vymaže sa **vždy len jedna konkrétna reakcia** (podľa ID)
+- Pokus o vymazanie cudzej reakcie vráti chybu: "You can only delete your own reactions"
 
 ### Emojis (`/chat/emojis`)
 
@@ -434,6 +490,8 @@ Názov je možné zmeniť cez `PATCH /chat/conversations/:id`.
 - Neprihlásený používateľ nemôže pristúpiť k chat endpointom
 - Používateľ môže pristupovať iba ku konverzáciám, v ktorých je účastník
 - Reakcie možné iba na správy v dostupných konverzáciách
+- **Používateľ môže vymazať len svoje vlastné reakcie** (nie cudzie)
+- Vymazanie reakcie je vždy po jednej (nie hromadné)
 - Reply možný iba na správy v tej istej konverzácii
 
 ### Data Protection
@@ -507,11 +565,23 @@ curl -X POST http://localhost:3000/chat/conversations/1/messages \
   -H "Content-Type: application/json" \
   -d '{"content":"Hi Alice!","replyToId":1}'
 
-# 6. Bob adds reaction
+# 6. Bob adds reaction (response vracia reactionId v message objektu)
 curl -X POST http://localhost:3000/chat/messages/1/reactions \
   -H "Authorization: Bearer <bob_token>" \
   -H "Content-Type: application/json" \
   -d '{"emojiId":1}'
+
+# 6b. Bob removes his reaction (musí vedieť reactionId)
+curl -X DELETE http://localhost:3000/chat/reactions/1 \
+  -H "Authorization: Bearer <bob_token>"
+
+# 7. Get messages with pagination
+curl "http://localhost:3000/chat/conversations/1/messages?limit=20" \
+  -H "Authorization: Bearer <alice_token>"
+
+# 8. Get next page (use nextCursor from previous response)
+curl "http://localhost:3000/chat/conversations/1/messages?limit=20&cursor=15" \
+  -H "Authorization: Bearer <alice_token>"
 ```
 
 ## Relations Diagram

@@ -30,3 +30,12 @@ export const createReactionBody = t.Object({
   emojiId: t.Number()
 })
 
+export const getMessagesQuery = t.Object({
+  cursor: t.Optional(t.String()),
+  limit: t.Optional(t.Number({
+    minimum: 1,
+    maximum: 100,
+    default: 50
+  }))
+})
+

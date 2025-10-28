@@ -7,10 +7,12 @@ import {
   updateConversationNameBody,
   addParticipantBody,
   createMessageBody,
-  createReactionBody
+  createReactionBody,
+  getMessagesQuery
 } from "./model";
 import { conversationDTO } from "./dto/conversation";
 import { messageDTO } from "./dto/message";
+import { createPaginatedResponse } from "./dto/pagination";
 
 export const chat = new Elysia({ prefix: "/chat" })
   .use(authenticateMiddleware)
@@ -339,6 +341,8 @@ export const chat = new Elysia({ prefix: "/chat" })
 
   .get("/conversations/:id/messages", async ({ params, user, query }) => {
     const conversationId = parseInt(params.id);
+    const limit = query.limit || 50;
+    const cursor = query.cursor;
 
     const participant = await database.conversationParticipant.findFirst({
       where: {
@@ -354,10 +358,14 @@ export const chat = new Elysia({ prefix: "/chat" })
       };
     }
 
+    // Načteme limit + 1 zpráv, abychom zjistili, zda existuje další stránka
     const messages = await database.message.findMany({
       where: {
         conversationId: conversationId
       },
+      take: limit + 1,
+      skip: cursor ? 1 : 0, // Přeskočíme cursor zprávu
+      cursor: cursor ? { id: parseInt(cursor) } : undefined,
       include: {
         author: true,
         replyTo: {
@@ -373,11 +381,24 @@ export const chat = new Elysia({ prefix: "/chat" })
         }
       },
       orderBy: {
-        createdAt: 'asc'
+        createdAt: 'desc' // Od nejnovějších ke starším (pro chat)
       }
     });
 
-    return messages.map(msg => messageDTO(msg));
+    // Zjistíme, zda existuje další stránka
+    const hasMore = messages.length > limit;
+    const paginatedMessages = hasMore ? messages.slice(0, limit) : messages;
+    
+    // Další cursor je ID poslední zprávy v aktuálním výsledku
+    const nextCursor = hasMore ? paginatedMessages[paginatedMessages.length - 1].id.toString() : null;
+
+    return createPaginatedResponse(
+      paginatedMessages.map(msg => messageDTO(msg)),
+      limit,
+      nextCursor
+    );
+  }, {
+    query: getMessagesQuery
   })
 
 
@@ -456,25 +477,42 @@ export const chat = new Elysia({ prefix: "/chat" })
     body: createReactionBody
   })
 
-  .delete("/messages/:id/reactions", async ({ params, user }) => {
-    const messageId = parseInt(params.id);
+  .delete("/reactions/:id", async ({ params, user }) => {
+    const reactionId = parseInt(params.id);
 
-    const message = await database.message.findUnique({
+    // Najdeme reakciu a overíme, že patrí prihlásenému používateľovi
+    const reaction = await database.reaction.findUnique({
       where: {
-        id: messageId
+        id: reactionId
+      },
+      include: {
+        message: {
+          include: {
+            conversation: true
+          }
+        }
       }
     });
 
-    if (!message) {
+    if (!reaction) {
       return {
         status: "error",
-        message: "Message not found"
+        message: "Reaction not found"
       };
     }
 
+    // Kontrola že používateľ je autorom reakcie
+    if (reaction.userId !== user.id) {
+      return {
+        status: "error",
+        message: "You can only delete your own reactions"
+      };
+    }
+
+    // Kontrola že používateľ má prístup ku konverzácii
     const participant = await database.conversationParticipant.findFirst({
       where: {
-        conversationId: message.conversationId,
+        conversationId: reaction.message.conversationId,
         userId: user.id
       }
     });
@@ -486,19 +524,12 @@ export const chat = new Elysia({ prefix: "/chat" })
       };
     }
 
-    const deletedReaction = await database.reaction.deleteMany({
+    // Vymažeme reakciu (iba jednu konkrétnu)
+    await database.reaction.delete({
       where: {
-        messageId: messageId,
-        userId: user.id
+        id: reactionId
       }
     });
-
-    if (deletedReaction.count === 0) {
-      return {
-        status: "error",
-        message: "Reaction not found"
-      };
-    }
 
     return {
       status: "success",
